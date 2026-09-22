@@ -1,0 +1,56 @@
+pipeline {
+    agent any
+
+    tools {
+        jdk 'JDK_17'
+        maven 'Maven_3.9'
+    }
+
+    environment {
+        // Environment configs passed dynamically
+        PLAYWRIGHT_BROWSERS_PATH = "${WORKSPACE}/ms-playwright"
+    }
+
+    stages {
+        stage('Install Dependencies') {
+            steps {
+                // Install browser binaries into the agent sandbox
+                sh 'mvn exec:java -e -Dexec.mainClass=com.microsoft.playwright.CLI -Dexec.args="install --with-deps"'
+            }
+        }
+
+        stage('Run Smoke Tests (Pull Requests)') {
+            when {
+                // Triggers only when a Pull Request is opened or updated
+                changeRequest()
+            }
+            steps {
+                echo "Executing Smoke Tests for PR #${CHANGE_ID}..."
+                sh 'mvn clean test -DsuiteXmlFile=smoke-suite.xml -Dbrowser=chromium -Denv=staging'
+            }
+        }
+
+        stage('Run Full Regression (Main Branch / Nightly)') {
+            when {
+                // Triggers on merge to main or manual/nightly triggers
+                branch 'main'
+            }
+            steps {
+                echo "Executing Full Regression on Main Branch..."
+                sh 'mvn clean test -DsuiteXmlFile=regression-suite.xml -Dthreads=8 -Denv=staging'
+            }
+        }
+    }
+
+    post {
+        always {
+            // Publish Test Reports
+            junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
+            allure reportBuildDef: '', results: [[path: 'target/allure-results']]
+        }
+        failure {
+            // Send alert on failure
+            echo "Pipeline failed! Send notification to team..."
+        }
+    }
+}
